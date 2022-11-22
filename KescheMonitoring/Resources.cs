@@ -1,5 +1,6 @@
 ﻿using Core.SystemMonitoring;
 using Microsoft.Extensions.Internal;
+using Microsoft.VisualBasic;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -20,78 +21,74 @@ namespace Core
 
 
             // Class, Properties, Filter
-            private (string, string?, string?) _instances;
+            private (string, string?, string?) _queryDefinitions;
             private int _updateinterval;
-            private System.Threading.Timer _timer;
-            private WMIHandler? _handle;
+            private System.Threading.Timer? _timer;
+            private WMIHandler _wmihandler;
             private static AutoResetEvent? _autoresetevent;
 
 
             #endregion
 
             #region Getters&Setters
-            protected internal (string, string, string) Instances { get; init; }
+            protected internal (string, string, string) Query { get; init; }
             protected internal ushort UpdateInterval { get; set; }
-            protected internal WMIHandler? Handle { get; init; }
+            protected internal WMIHandler Handle { get; init; }
             #endregion
 
             #region Constructors
 
 
-            public Resources((string, string?, string?) instances, int updateInterval = 3600000)
+            public Resources((string, string?, string?) queryDefinitions, int updateInterval = 3600000)
             {
-                _instances = instances;
+                _queryDefinitions = queryDefinitions;
                 _updateinterval = updateInterval;
-                _handle = new();
+                _wmihandler = new();
                 _autoresetevent = new(false);
-                _timer = new System.Threading.Timer(Update_Resources, _autoresetevent, 1000, updateInterval);
             }
 
             #endregion
 
             #region TimerMethods
 
+            protected internal void StartCount()
+            {
+                _timer = new System.Threading.Timer(GetResources, _autoresetevent, 1000, _updateinterval);
+            }
             public void StopCount()
             {
                 _timer.Dispose();
-                _handle.Dispose();
             }
 
 
-            public void Update_Resources(object? state)
+            public void GetResources(object? state)
             {
-                if (_handle.Queue == 0)
+                if (_wmihandler.Queue == 0)
                 {
-                    Task task = Task.Run(() =>
+                    Task asyncQueryTask = Task.Run(() =>
                     {
-                        _handle.GetClassInstances(_instances.Item1, DateTime.Now, _instances.Item2, _instances.Item3);
+                        _wmihandler.GetClassInstances(_queryDefinitions.Item1, DateTime.Now, _queryDefinitions.Item2, _queryDefinitions.Item3);
                     });
-                    while(!task.IsCompleted)
-                    {
-                        System.Console.WriteLine("|\t Status: {0} \t|\t Thread ID: {1}\t|", task.Status.ToString(), task.Id);
-                    }
+                    
                     #region ExceptionCommunication
-                    if (task.IsFaulted)
+                    if (asyncQueryTask.IsFaulted)
                     {
                         StringBuilder exceptionBuilder = new();
-                        for (int i = 0; i < task.Exception.InnerExceptions.Count; i++)
+                        for (int i = 0; i < asyncQueryTask.Exception.InnerExceptions.Count; i++)
                         {
-                            exceptionBuilder.Append(task.Exception.InnerExceptions[i].Source + ": " 
-                                                    + task.Exception.InnerExceptions[i].Message 
-                                                    + "(Trace - " + task.Exception.InnerExceptions[i].StackTrace 
-                                                    + ");\n Data: " + task.Exception.InnerExceptions[i].Data
-                                                    + "\n Target Site: " + task.Exception.InnerExceptions[i].TargetSite);
+                            exceptionBuilder.Append(asyncQueryTask.Exception.InnerExceptions[i].Source + ": " 
+                                                    + asyncQueryTask.Exception.InnerExceptions[i].Message 
+                                                    + "(Trace - " + asyncQueryTask.Exception.InnerExceptions[i].StackTrace 
+                                                    + ");\n Data: " + asyncQueryTask.Exception.InnerExceptions[i].Data
+                                                    + "\n Target Site: " + asyncQueryTask.Exception.InnerExceptions[i].TargetSite);
                         }
-                        exceptionBuilder.Append("\n" + task.Exception.HelpLink);
-                        exceptionBuilder.Append("\n\t\t" + task.Exception.HResult);
+                        exceptionBuilder.Append("\n" + asyncQueryTask.Exception.HelpLink);
+                        exceptionBuilder.Append("\n\t\t" + asyncQueryTask.Exception.HResult);
                     }
                     #endregion
 
-                    if (task.IsCompleted)
-                    {
-                        _handle.Dispose();
-                        task.Dispose();
-                    }
+                    if (asyncQueryTask.IsCompleted)
+                        asyncQueryTask.Dispose();
                 }
             }
 

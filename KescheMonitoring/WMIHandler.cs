@@ -18,23 +18,20 @@ namespace Core
 
             #region VariableDeclaration
 
-            // Class responsible for querying asynchronously
-            private System.Management.ManagementOperationObserver _operationobserver;
+                // Class responsible for querying asynchronously
+                private System.Management.ManagementOperationObserver _asyncoperationshandler;
 
-            // Defines options for retrieving the information using operationobserver (such as the Block size gathered, whether the result can be reiterable, etc)
-            private static System.Management.EnumerationOptions? _enumoptions;
+                // Defines options for retrieving the information using operationobserver (such as the Block size gathered, whether the result can be reiterable, etc)
+                private static System.Management.EnumerationOptions? _queryoptions;
 
-            // Controls the Disposal of resources
-            private bool _iscompleted;
+                // Stores how many operations are being handled by this instance
+                private byte _queue;
 
-            // Controls the amount of simultaneous queries executed by the same handler
-            private byte _queue;
+                // Stores an unique ID for this handler
+                private int _handlerId;
 
-            // Stores an unique ID for this handler
-            private int _handlerId;
-
-            // Stores the timestamp of the 
-            private string _querytimestamp;
+                // Stores the timestamp in which the query was made
+                private string _querytimestamp;
 
 
             #endregion
@@ -44,9 +41,9 @@ namespace Core
             #region Getters&Setters
 
 
-            internal bool Completed { get => _iscompleted; }
-            internal byte Queue { get; }
-            internal string Timestamp { get => _querytimestamp; }
+                internal byte Queue { get => _queue; }
+                internal string Timestamp { get => _querytimestamp; }
+
 
             #endregion
 
@@ -55,109 +52,120 @@ namespace Core
             #region Constructors
 
 
-            // Uses all default values
-            public WMIHandler()
-            {
-                _operationobserver = new();
-                _operationobserver.ObjectReady += ObjectReturned;
-                _operationobserver.Completed += QueryFinish;
-                _operationobserver.Progress += Progress;
-                _operationobserver.ObjectPut += WMISet;
+                // Initializes the handlers and control variables to a default
+                public WMIHandler()
+                {
+                    _asyncoperationshandler = new();
+                    _asyncoperationshandler.ObjectReady += OnObjectReturned;
+                    _asyncoperationshandler.Completed += OnQueryFinish;
 
-                _enumoptions = new();
-                _enumoptions.BlockSize = 10;
-                _enumoptions.Rewindable = true;
-                _enumoptions.EnsureLocatable = true;
-                _enumoptions.ReturnImmediately = true;
+                    _queryoptions = new();
+                    _queryoptions.BlockSize = 10;
+                    _queryoptions.Rewindable = true;
+                    _queryoptions.EnsureLocatable = true;
+                    _queryoptions.ReturnImmediately = true;
 
-                _listglobal = new();
-                _iscompleted = false;
+                    _queue = 0;
+                    _querytimestamp = DateTime.Now.ToString();
 
-                _index = 0;
-                _queue = 0;
-                System.Random rnd = new();
-                _handlerId = rnd.Next();
-            }
+                    System.Random handlerIdGenerator = new();
+                    _handlerId = handlerIdGenerator.Next(0, 1000);
+                }
 
 
             #endregion
 
 
-            // Implements the querying methods used to access the WMI
+            // Implements the methods used to Query WMI Providers
 
             #region QueryMethods
 
-            // Gets all the instances in managementClass and copies the resulting list into the provided array
-            public void GetClassInstances(string managementClass,
-                                          DateTime timestamp,
-                                          string? classProperties = null,
-                                          string? filter = null)
-            {
-                #region Initialization
-                WqlObjectQuery query = new();
-                ManagementObjectSearcher searcher = new ManagementObjectSearcher();
-                query.QueryLanguage = "WQL";
-                _querytimestamp = ((timestamp.Ticks) - (DateTime.UnixEpoch.Ticks)).ToString().Remove(10);
-                #endregion
-                #region QueryParameterChecking
-                if (classProperties == null && filter == null)
-                    query.QueryString = "SELECT * FROM " + managementClass;
-                else if (classProperties == null && filter != null)
-                    query.QueryString = "SELECT * FROM " + managementClass + " WHERE " + filter;
-                else if (classProperties != null && filter == null)
-                    query.QueryString = "SELECT " + classProperties + " FROM " + managementClass;
-                else if (classProperties != null && filter != null)
-                    query.QueryString = "SELECT " + classProperties + " FROM " + managementClass + " WHERE " + filter;
-                #endregion
-                #region Searcher
-                searcher.Options = _enumoptions;
-                searcher.Query = query;
-                searcher.Get(_operationobserver);
-                #endregion
-                #region Queue
-                _queue++;
-                #endregion
-            }
+                // Invokes the Operation Handler to retrieve the specified and filtered properties from the demanded class
+                public void GetClassInstances(string WMIClass,
+                                              DateTime currentTimestamp,
+                                              string? classProperties = null,
+                                              string? filter = null)
+                {
+                    #region Initialization
+                        WqlObjectQuery queryDefinitions = new();
+                        ManagementObjectSearcher querier = new ManagementObjectSearcher();
+                        queryDefinitions.QueryLanguage = "WQL";
+                        _querytimestamp = ((currentTimestamp.Ticks) - (DateTime.UnixEpoch.Ticks)).ToString().Remove(10);
+                    #endregion
+
+
+                    #region QueryParameterChecking
+                        if (classProperties == null && filter == null)
+                            queryDefinitions.QueryString = "SELECT * FROM " + WMIClass;
+                        else if (classProperties == null && filter != null)
+                            queryDefinitions.QueryString = "SELECT * FROM " + WMIClass + " WHERE " + filter;
+                        else if (classProperties != null && filter == null)
+                            queryDefinitions.QueryString = "SELECT " + classProperties + " FROM " + WMIClass;
+                        else if (classProperties != null && filter != null)
+                            queryDefinitions.QueryString = "SELECT " + classProperties + " FROM " + WMIClass + " WHERE " + filter;
+                    #endregion
+
+
+                    #region Searcher
+                        if (_queryoptions != null)
+                            querier.Options = _queryoptions;
+                        querier.Query.QueryString = queryDefinitions.QueryString;
+                        querier.Get(_asyncoperationshandler);
+                    #endregion
+
+
+                    #region Queue
+                        _queue++;
+                    #endregion
+                }
 
 
             #endregion
 
-            // Defines the Event Methods for the Management Operation Observer
+            // Defines the Event Methods for the Operations Observer
             #region ObserverEvents
-            private void ObjectReturned(object? sender, 
-                                        ObjectReadyEventArgs? obj)
-            {
-                Update(obj.NewObject,
-                       obj.NewObject.ClassPath.ClassName);
-            }
-            internal void Update(ManagementBaseObject? obj,
-                                string objClass)
-            {
-                PropertyDataCollection.PropertyDataEnumerator enumerator = obj.Properties.GetEnumerator();
-                StringBuilder sb = new();
-                ushort propIndex = 0;
-
-                while (enumerator.MoveNext())
+                private void OnObjectReturned(object eventInvoker, 
+                                            ObjectReadyEventArgs? eventSubject)
                 {
-                    if (propIndex == 0)
-                        sb.Append("(" + obj.ClassPath.ClassName + "," + _querytimestamp + "," + enumerator.Current.Value);
-                    else
-                        sb.Append("," + enumerator.Current.Value);
-                    propIndex++;
+                    if(eventSubject != null)
+                        IterateObject(eventSubject.NewObject);
                 }
-                if (!enumerator.MoveNext())
-                    propIndex = 0;
-                sb.Append(")");
-                System.Console.WriteLine(sb);
-                sb.Clear();
-            }
-            private void QueryFinish(object? sender,
-                                     CompletedEventArgs? obj)
-            {
-                if (_queue > 1) { _queue--; } else if (_queue == 1) { _queue--; _iscompleted = true;  } else { _iscompleted = true;  };
-            }
 
-            internal void Dispose() { _iscompleted = false; }
+
+                internal void IterateObject(ManagementBaseObject objectToIterate)
+                {
+                    PropertyDataCollection.PropertyDataEnumerator enumerator = objectToIterate.Properties.GetEnumerator();
+                    StringBuilder sqlFormattedObject = new();
+                    ushort propertyIndex = 0;
+
+
+                    while (enumerator.MoveNext())
+                    {
+                        if (propertyIndex == 0)
+                            sqlFormattedObject.Append("(" + objectToIterate.ClassPath.ClassName + "," + _querytimestamp + "," + enumerator.Current.Value);
+                        else
+                            sqlFormattedObject.Append("," + enumerator.Current.Value);
+                        propertyIndex++;
+                    }
+
+                    if (!enumerator.MoveNext())
+                    {
+                        sqlFormattedObject.Append(")");
+                        // InsertIntoDatabase(sqlFormattedObject);
+                        _ = objectToIterate;
+                        _ = propertyIndex;
+                        _ = sqlFormattedObject;
+                        _ = enumerator;
+                    }
+                   
+                }
+
+
+                private void OnQueryFinish(object? sender,
+                                         CompletedEventArgs? obj)
+                {
+                    if (_queue >= 1) { _queue--; }
+                }
 
             #endregion
 
